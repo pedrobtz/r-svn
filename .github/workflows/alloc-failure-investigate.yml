@@ -11,6 +11,10 @@ on:
 
 jobs:
   sweep:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, patched]
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
@@ -18,6 +22,14 @@ jobs:
       RB: /home/runner/rbuild
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Use unpatched sources (base variant)
+        if: matrix.variant == 'base'
+        run: |
+          git checkout 14f32419785a4e952287e6dfd8583df4d4bbd0a3 -- src
+          git status --short | head
 
       - name: Install build deps
         run: |
@@ -30,8 +42,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: /home/runner/.ccache
-          key: ccache-${{ github.sha }}
-          restore-keys: ccache-
+          key: ccache-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.variant }}-
 
       - name: Build R-devel (-g -O0)
         shell: bash
@@ -70,13 +82,22 @@ jobs:
           for r in $REPROS; do
             bash $H/sweep.sh $r 2>&1 | tee $RESULTS/$r.summary.txt
           done
+          # gz_stream.stream.state is read before initialisation when
+          # inflateInit2 fails; fill fresh malloc memory with garbage so
+          # that shows up deterministically.
+          for r in gzfile_open readRDS_gz; do
+            MALLOC_PERTURB_=165 RESULTS=$RESULTS/perturb bash $H/sweep.sh $r 2>&1 | tee $RESULTS/$r.perturb.summary.txt
+          done
           echo "================ OVERALL"
           for r in $REPROS; do
             printf '%-18s ' $r; awk '{print $2}' $RESULTS/$r/results.txt | sort | uniq -c | tr '\n' ' '; echo
           done | tee $RESULTS/OVERALL.txt
+          for r in gzfile_open readRDS_gz; do
+            printf '%-18s ' "$r+perturb"; awk '{print $2}' $RESULTS/perturb/$r/results.txt | sort | uniq -c | tr '\n' ' '; echo
+          done | tee -a $RESULTS/OVERALL.txt
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: alloc-results
+          name: alloc-results-${{ matrix.variant }}
           path: results
