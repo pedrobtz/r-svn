@@ -34,13 +34,19 @@ jobs:
           restore-keys: ccache-
 
       - name: Build R-devel (-g -O0)
+        shell: bash
         run: |
           mkdir -p $RB && cd $RB
           $GITHUB_WORKSPACE/configure CC="ccache gcc" CFLAGS="-g -O0" FFLAGS="-g -O0" \
             CXX="ccache g++" CXXFLAGS="-g -O0" \
             --without-recommended-packages --disable-java --with-x=no \
             --disable-byte-compiled-packages > configure.log 2>&1 || { tail -50 configure.log; exit 1; }
-          make -j"$(nproc)" > make.log 2>&1 || { tail -80 make.log; exit 1; }
+          nproc
+          ( timeout 40m make -j"$(nproc)" </dev/null > make.log 2>&1; echo $? > make.rc ) &
+          pid=$!
+          while kill -0 $pid 2>/dev/null; do sleep 30; echo "[$(date +%T)] $(tail -1 make.log | cut -c1-160)"; done
+          rc=$(cat make.rc); echo "make exit $rc"
+          if [ "$rc" -ne 0 ]; then tail -100 make.log; exit 1; fi
           ccache -s | head -20
           bin/R --version | head -2
 
