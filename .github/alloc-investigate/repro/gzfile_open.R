@@ -1,0 +1,6 @@
+f <- Sys.getenv("RDS_FILE")
+if (nzchar(Sys.getenv("BASELINE"))) quit(save = "no")
+con <- gzfile(f, "rb")
+x <- readBin(con, "raw", 2L)
+close(con)
+dput(x)

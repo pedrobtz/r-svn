@@ -1,0 +1,76 @@
+name: alloc-failure-investigate
+
+on:
+  workflow_dispatch:
+    inputs:
+      repros:
+        description: space-separated reproducer names (repro/*.R); empty = all
+        default: ''
+  push:
+    branches: [ci/alloc-failure]
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      CCACHE_DIR: /home/runner/.ccache
+      RB: /home/runner/rbuild
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential gfortran gdb ccache \
+            libreadline-dev libbz2-dev liblzma-dev libpcre2-dev zlib1g-dev \
+            libcurl4-openssl-dev libicu-dev libdeflate-dev >/dev/null
+          printf 'Revision: 90890\nLast Changed Date: 2026-11-14\n' > SVNINFO
+
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: Build R-devel (-g -O0)
+        run: |
+          mkdir -p $RB && cd $RB
+          $GITHUB_WORKSPACE/configure CC="ccache gcc" CFLAGS="-g -O0" FFLAGS="-g -O0" \
+            CXX="ccache g++" CXXFLAGS="-g -O0" \
+            --without-recommended-packages --disable-java --with-x=no \
+            --disable-byte-compiled-packages > configure.log 2>&1 || { tail -50 configure.log; exit 1; }
+          make -j"$(nproc)" > make.log 2>&1 || { tail -80 make.log; exit 1; }
+          ccache -s | head -20
+          bin/R --version | head -2
+
+      - name: Prepare
+        run: |
+          H=$GITHUB_WORKSPACE/.github/alloc-investigate
+          gcc -shared -fPIC -O1 -o $RB/failmalloc.so $H/failmalloc.c -ldl
+          $RB/bin/R --vanilla --no-echo -e 'e <- Sys.getenv(); e <- e[grepl("^(R_HOME|R_SHARE_DIR|R_INCLUDE_DIR|R_DOC_DIR|R_ARCH|LD_LIBRARY_PATH)$", names(e))]; writeLines(paste0(names(e), "=", e))' > $RB/renv.txt
+          cat $RB/renv.txt
+          $RB/bin/R --vanilla --no-echo -e 'saveRDS(list(a = 1:10, b = letters), "'$RB'/x.rds")'
+
+      - name: Sweep
+        env:
+          REPROS: ${{ inputs.repros }}
+        run: |
+          H=$GITHUB_WORKSPACE/.github/alloc-investigate
+          export RX=$RB/bin/exec/R FAILMALLOC=$RB/failmalloc.so RDS_FILE=$RB/x.rds RENV_FILE=$RB/renv.txt
+          export RESULTS=$GITHUB_WORKSPACE/results CAP=4000 GDB_MAX=30
+          mkdir -p $RESULTS
+          if [ -z "${REPROS:-}" ]; then REPROS=$(cd $H/repro && ls *.R | sed 's/\.R$//'); fi
+          for r in $REPROS; do
+            bash $H/sweep.sh $r 2>&1 | tee $RESULTS/$r.summary.txt
+          done
+          echo "================ OVERALL"
+          for r in $REPROS; do
+            printf '%-18s ' $r; awk '{print $2}' $RESULTS/$r/results.txt | sort | uniq -c | tr '\n' ' '; echo
+          done | tee $RESULTS/OVERALL.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alloc-results
+          path: results
