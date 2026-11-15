@@ -4500,6 +4500,16 @@ tools::assertError(getGeneric("initialize", where = x)) # caused segfault or bus
 
 
 
+## The byte compiler's constant pool treated 0 and -0 as the same
+## constant, so a folded -0 could be loaded as 0
+f <- function() { s <- 0; -(0 * 0) }
+fc <- compiler::cmpfun(f)
+stopifnot(identical(1/f(), -Inf), identical(1/fc(), -Inf))
+g <- function() c(0, -(0 * 0), 0 * -1)
+stopifnot(identical(1/compiler::cmpfun(g)(), c(Inf, -Inf, -Inf)))
+## the compiled versions gave 0 in R <= 4.6.2
+
+
 
 ## keep at end
 rbind(last =  proc.time() - .pt,
