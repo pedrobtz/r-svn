@@ -4500,6 +4500,18 @@ tools::assertError(getGeneric("initialize", where = x)) # caused segfault or bus
 
 
 
+## Serializing a wrapper around an ALTREP object incremented the wrapped
+## object's reference count for good, so after its data had been
+## accessed, later access signalled "REFCNT on locked WRAPPER data"
+x <- rnorm(100)
+y <- .Internal(wrap_meta(.Internal(wrap_meta(x, 0L, FALSE)), 0L, FALSE))
+s <- sum(y)
+z <- unserialize(serialize(y, NULL))
+stopifnot(identical(sum(y), s), identical(y * 2, x * 2),
+          identical(z, y))
+## failed in R 4.6.2
+
+
 
 ## keep at end
 rbind(last =  proc.time() - .pt,
